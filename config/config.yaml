@@ -1,0 +1,56 @@
+markets:
+  kospi:
+    currency: KRW
+    data_source: yfinance
+    name: KOSPI
+    ticker: ^KS11
+    timezone: Asia/Seoul
+    trading_hours: 09:00-15:30
+  nasdaq:
+    currency: USD
+    data_source: yfinance
+    name: NASDAQ
+    ticker: ^IXIC
+    timezone: US/Eastern
+    trading_hours: 09:30-16:00
+  nikkei:
+    currency: JPY
+    data_source: yfinance
+    name: Nikkei 225
+    ticker: ^N225
+    timezone: Asia/Tokyo
+    trading_hours: 09:00-15:00
+  sp500:
+    currency: USD
+    data_source: yfinance
+    name: S&P 500
+    ticker: ^GSPC
+    timezone: US/Eastern
+    trading_hours: 09:30-16:00
+ml:
+  lstm_batch_size: 32
+  lstm_epochs: 100
+  models:
+  - LSTM
+  - GRU
+  - Prophet
+  sequence_length: 60
+  train_test_split: 0.8
+monte_carlo:
+  confidence_levels:
+  - 95
+  - 99
+  forecast_days: 126
+  method: geometric_brownian
+  simulations: 10000
+technical:
+  bollinger_period: 20
+  bollinger_std: 2.0
+  ma_periods:
+  - 20
+  - 50
+  - 200
+  macd_fast: 12
+  macd_signal: 9
+  macd_slow: 26
+  rsi_period: 14
