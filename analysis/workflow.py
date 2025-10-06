@@ -44,9 +44,24 @@ class AnalysisResult:
 class UnifiedFairValueWorkflow:
     """통합 공정가치 분석 워크플로우"""
 
-    def __init__(self, market_name: str = "kospi"):
+    def __init__(self, market_name: str = "kospi", custom_ticker: str = None):
         self.market_name = market_name
-        self.market_config = config_manager.get_market_config(market_name)
+        self.custom_ticker = custom_ticker
+        
+        # 시장 설정 처리
+        if market_name == "custom" and custom_ticker:
+            # 개별 종목을 위한 커스텀 설정 생성
+            from config.settings import MarketConfig
+            self.market_config = MarketConfig(
+                ticker=custom_ticker,
+                name=custom_ticker,
+                timezone="UTC",  # 기본값
+                trading_hours="09:30-16:00",  # 기본값
+                currency="USD"  # 기본값, 실제로는 yfinance에서 가져옴
+            )
+        else:
+            self.market_config = config_manager.get_market_config(market_name)
+            
         self.technical_config = config_manager.technical
         self.monte_carlo_config = config_manager.monte_carlo
 
@@ -169,6 +184,12 @@ class UnifiedFairValueWorkflow:
                 None,
                 self.data_collector.fetch_real_time_data
             )
+            
+            # 개별 종목인 경우 통화 정보 업데이트
+            if self.market_name == "custom" and real_time_data:
+                currency = real_time_data.get('currency', 'USD')
+                if hasattr(self.market_config, 'currency'):
+                    self.market_config.currency = currency
 
             return {
                 'market_data': market_data,
@@ -473,6 +494,7 @@ class UnifiedFairValueWorkflow:
                 'current_price': current_price,
                 'price_change': price_change,
                 'price_change_percent': price_change_pct,
+                'currency': getattr(self.market_config, 'currency', 'USD'),
                 'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             },
             'technical_summary': {

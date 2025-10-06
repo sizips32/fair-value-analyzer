@@ -113,6 +113,10 @@ class DataCollector:
                 'day_low': info.get('dayLow', 0),
                 'volume': info.get('volume', 0),
                 'market_cap': info.get('marketCap', 0),
+                'currency': info.get('currency', 'USD'),
+                'long_name': info.get('longName', self.config.ticker),
+                'sector': info.get('sector', ''),
+                'industry': info.get('industry', ''),
                 'timestamp': datetime.now()
             }
 

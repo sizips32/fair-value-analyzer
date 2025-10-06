@@ -85,17 +85,83 @@ class FairValueApp:
         """사이드바 렌더링 및 설정 수집"""
         st.sidebar.markdown("# ⚙️ 분석 설정")
 
-        # 시장 선택
-        markets = list(config_manager.markets.keys())
-        market_names = [config_manager.markets[m].name for m in markets]
-
-        selected_idx = st.sidebar.selectbox(
-            "📈 분석 대상 시장",
-            range(len(markets)),
-            format_func=lambda x: market_names[x],
-            help="분석할 시장을 선택하세요"
+        # 분석 모드 선택
+        analysis_mode = st.sidebar.radio(
+            "📊 분석 모드",
+            ["주요 지수", "개별 종목"],
+            help="분석할 대상을 선택하세요"
         )
-        selected_market = markets[selected_idx]
+
+        if analysis_mode == "주요 지수":
+            # 시장 선택
+            markets = list(config_manager.markets.keys())
+            market_names = [config_manager.markets[m].name for m in markets]
+
+            selected_idx = st.sidebar.selectbox(
+                "📈 분석 대상 시장",
+                range(len(markets)),
+                format_func=lambda x: market_names[x],
+                help="분석할 시장을 선택하세요"
+            )
+            selected_market = markets[selected_idx]
+            custom_ticker = None
+            
+        else:  # 개별 종목
+            st.sidebar.markdown("### 🏢 개별 종목 분석")
+            
+            # 도움말
+            with st.sidebar.expander("💡 티커 입력 도움말"):
+                st.markdown("""
+                **주요 티커 예시:**
+                - 미국: AAPL, MSFT, TSLA, GOOGL
+                - 한국: 005930.KS (삼성전자), 000660.KS (SK하이닉스)
+                - 일본: 7203.T (토요타), 6758.T (소니)
+                - 유럽: ASML.AS, SAP.DE
+                
+                **참고사항:**
+                - 한국 주식은 .KS 접미사 필요
+                - 일본 주식은 .T 접미사 필요
+                - 유럽 주식은 .AS, .DE 등 접미사 필요
+                """)
+            
+            # 티커 입력
+            custom_ticker = st.sidebar.text_input(
+                "📝 종목 티커 입력",
+                placeholder="예: AAPL, MSFT, TSLA, 005930.KS",
+                help="Yahoo Finance 티커 심볼을 입력하세요"
+            )
+            
+            if custom_ticker:
+                # 티커 유효성 검사
+                try:
+                    import yfinance as yf
+                    test_ticker = yf.Ticker(custom_ticker)
+                    info = test_ticker.info
+                    if info and 'symbol' in info:
+                        company_name = info.get('longName', custom_ticker)
+                        sector = info.get('sector', '')
+                        industry = info.get('industry', '')
+                        currency = info.get('currency', 'USD')
+                        
+                        st.sidebar.success(f"✅ {company_name} 확인됨")
+                        
+                        # 추가 정보 표시
+                        if sector:
+                            st.sidebar.info(f"🏢 섹터: {sector}")
+                        if industry:
+                            st.sidebar.info(f"🏭 업종: {industry}")
+                        st.sidebar.info(f"💰 통화: {currency}")
+                        
+                        selected_market = "custom"
+                    else:
+                        st.sidebar.error("❌ 유효하지 않은 티커입니다")
+                        selected_market = "kospi"  # 기본값
+                except Exception as e:
+                    st.sidebar.error(f"❌ 티커 검증 오류: {str(e)}")
+                    selected_market = "kospi"  # 기본값
+            else:
+                st.sidebar.warning("⚠️ 티커를 입력해주세요")
+                selected_market = "kospi"  # 기본값
 
         # 분석 기간
         st.sidebar.markdown("### 📅 분석 기간")
@@ -181,6 +247,7 @@ class FairValueApp:
 
         return {
             'market': selected_market,
+            'custom_ticker': custom_ticker,
             'start_date': start_date,
             'end_date': end_date,
             'monte_carlo_sims': monte_carlo_sims,
@@ -190,19 +257,145 @@ class FairValueApp:
             'include_scenarios': include_scenarios
         }
 
-    def render_main_header(self, market_name: str):
+    def render_main_header(self, settings: Dict):
         """메인 헤더 렌더링"""
-        market_config = config_manager.get_market_config(market_name)
+        market_name = settings['market']
+        custom_ticker = settings.get('custom_ticker')
+        
+        if market_name == "custom" and custom_ticker:
+            # 개별 종목 분석
+            try:
+                import yfinance as yf
+                ticker = yf.Ticker(custom_ticker)
+                info = ticker.info
+                
+                company_name = info.get('longName', custom_ticker)
+                currency = info.get('currency', 'USD')
+                
+                st.markdown(f'<h1 class="main-header">📊 {company_name} Fair Value Analyzer</h1>',
+                           unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div style="text-align: center; color: #666; margin-bottom: 2rem;">
+                    실시간 데이터 기반 공정가치 분석 및 예측 시스템<br>
+                    <small>Ticker: {custom_ticker} | Currency: {currency}</small>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            except Exception as e:
+                st.error(f"종목 정보를 가져올 수 없습니다: {str(e)}")
+                st.markdown('<h1 class="main-header">📊 개별 종목 Fair Value Analyzer</h1>',
+                           unsafe_allow_html=True)
+        else:
+            # 주요 지수 분석
+            market_config = config_manager.get_market_config(market_name)
 
-        st.markdown(f'<h1 class="main-header">📊 {market_config.name} Fair Value Analyzer</h1>',
-                   unsafe_allow_html=True)
+            st.markdown(f'<h1 class="main-header">📊 {market_config.name} Fair Value Analyzer</h1>',
+                       unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div style="text-align: center; color: #666; margin-bottom: 2rem;">
-            실시간 데이터 기반 공정가치 분석 및 예측 시스템<br>
-            <small>Ticker: {market_config.ticker} | Currency: {market_config.currency}</small>
-        </div>
-        """, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style="text-align: center; color: #666; margin-bottom: 2rem;">
+                실시간 데이터 기반 공정가치 분석 및 예측 시스템<br>
+                <small>Ticker: {market_config.ticker} | Currency: {market_config.currency}</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+    def render_stock_info(self, result):
+        """개별 종목 추가 정보 표시"""
+        if not result or not result.summary:
+            return
+            
+        summary = result.summary
+        market_info = summary.get('market_info', {})
+        
+        # 실시간 데이터에서 추가 정보 가져오기
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(market_info.get('ticker', ''))
+            info = ticker.info
+            
+            st.markdown("### 🏢 종목 기본 정보")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                market_cap = info.get('marketCap', 0)
+                if market_cap > 0:
+                    if market_cap >= 1e12:
+                        market_cap_str = f"{market_cap/1e12:.1f}T"
+                    elif market_cap >= 1e9:
+                        market_cap_str = f"{market_cap/1e9:.1f}B"
+                    elif market_cap >= 1e6:
+                        market_cap_str = f"{market_cap/1e6:.1f}M"
+                    else:
+                        market_cap_str = f"{market_cap:,.0f}"
+                    
+                    st.metric(
+                        label="시가총액",
+                        value=market_cap_str,
+                        help="Market Capitalization"
+                    )
+            
+            with col2:
+                pe_ratio = info.get('trailingPE', 0)
+                if pe_ratio and pe_ratio > 0:
+                    st.metric(
+                        label="PER",
+                        value=f"{pe_ratio:.1f}",
+                        help="Price-to-Earnings Ratio"
+                    )
+            
+            with col3:
+                pb_ratio = info.get('priceToBook', 0)
+                if pb_ratio and pb_ratio > 0:
+                    st.metric(
+                        label="PBR",
+                        value=f"{pb_ratio:.2f}",
+                        help="Price-to-Book Ratio"
+                    )
+            
+            with col4:
+                dividend_yield = info.get('dividendYield', 0)
+                if dividend_yield and dividend_yield > 0:
+                    st.metric(
+                        label="배당수익률",
+                        value=f"{dividend_yield*100:.2f}%",
+                        help="Dividend Yield"
+                    )
+            
+            # 추가 정보
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📊 기본 정보")
+                basic_info = {
+                    "회사명": info.get('longName', 'N/A'),
+                    "섹터": info.get('sector', 'N/A'),
+                    "업종": info.get('industry', 'N/A'),
+                    "거래소": info.get('exchange', 'N/A'),
+                    "통화": info.get('currency', 'N/A')
+                }
+                
+                for key, value in basic_info.items():
+                    if value != 'N/A':
+                        st.text(f"{key}: {value}")
+            
+            with col2:
+                st.markdown("#### 📈 거래 정보")
+                trading_info = {
+                    "52주 최고가": f"{info.get('fiftyTwoWeekHigh', 0):.2f}",
+                    "52주 최저가": f"{info.get('fiftyTwoWeekLow', 0):.2f}",
+                    "평균 거래량": f"{info.get('averageVolume', 0):,}",
+                    "현재 거래량": f"{info.get('volume', 0):,}",
+                    "거래 시간": info.get('exchangeTimezoneName', 'N/A')
+                }
+                
+                for key, value in trading_info.items():
+                    if value != 'N/A' and value != '0.00':
+                        st.text(f"{key}: {value}")
+                        
+        except Exception as e:
+            st.warning(f"종목 정보를 가져올 수 없습니다: {str(e)}")
 
     def render_analysis_controls(self, settings: Dict) -> bool:
         """분석 실행 컨트롤"""
@@ -244,7 +437,12 @@ class FairValueApp:
                 status_text.text(f"🔄 {step_name}: {status}")
 
             # 워크플로우 초기화
-            workflow = UnifiedFairValueWorkflow(settings['market'])
+            if settings['market'] == 'custom' and settings.get('custom_ticker'):
+                # 개별 종목 분석을 위한 커스텀 설정
+                workflow = UnifiedFairValueWorkflow("custom", custom_ticker=settings['custom_ticker'])
+            else:
+                # 주요 지수 분석
+                workflow = UnifiedFairValueWorkflow(settings['market'])
 
             # 몬테카를로 설정 업데이트
             config_manager.update_config('monte_carlo',
@@ -290,10 +488,11 @@ class FairValueApp:
             price = summary.get('market_info', {}).get('current_price', 0)
             change = summary.get('market_info', {}).get('price_change', 0)
             change_pct = summary.get('market_info', {}).get('price_change_percent', 0)
+            currency = summary.get('market_info', {}).get('currency', 'USD')
 
             st.metric(
                 label="현재가",
-                value=f"{price:,.0f}",
+                value=f"{price:,.2f} {currency}",
                 delta=f"{change:+.2f} ({change_pct:+.2f}%)"
             )
 
@@ -525,7 +724,7 @@ class FairValueApp:
         settings = self.render_sidebar()
 
         # 메인 헤더
-        self.render_main_header(settings['market'])
+        self.render_main_header(settings)
 
         # 분석 컨트롤
         should_run_analysis = self.render_analysis_controls(settings)
@@ -538,6 +737,10 @@ class FairValueApp:
         # 요약 지표
         if st.session_state.analysis_result:
             self.render_summary_metrics(st.session_state.analysis_result)
+            
+            # 개별 종목 추가 정보
+            if settings.get('market') == 'custom' and settings.get('custom_ticker'):
+                self.render_stock_info(st.session_state.analysis_result)
 
         # 메인 대시보드
         self.render_main_dashboard(st.session_state.analysis_result)
