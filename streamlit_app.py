@@ -311,10 +311,16 @@ class FairValueApp:
         # 실시간 데이터에서 추가 정보 가져오기
         try:
             import yfinance as yf
+            from data.collectors import DataProcessor
+            
             ticker = yf.Ticker(market_info.get('ticker', ''))
             info = ticker.info
             
             st.markdown("### 🏢 종목 기본 정보")
+            
+            # 통화 정보 가져오기
+            currency = info.get('currency', 'USD')
+            financial_currency = info.get('financialCurrency', currency)
             
             col1, col2, col3, col4 = st.columns(4)
             
@@ -355,13 +361,229 @@ class FairValueApp:
                     )
             
             with col4:
-                dividend_yield = info.get('dividendYield', 0)
-                if dividend_yield and dividend_yield > 0:
+                # 개선된 배당수익률 표시
+                dividend_info = {
+                    'dividend_yield': info.get('dividendYield', 0),
+                    'dividend_rate': info.get('dividendRate', 0),
+                    'payout_ratio': info.get('payoutRatio', 0)
+                }
+                
+                # 배당 데이터 검증
+                is_valid, errors = DataProcessor.validate_dividend_data(dividend_info)
+                
+                if is_valid and dividend_info['dividend_yield'] > 0:
+                    # 배당 지표 계산
+                    current_price = info.get('currentPrice', 0)
+                    dividend_metrics = DataProcessor.calculate_dividend_metrics(dividend_info, current_price)
+                    
                     st.metric(
                         label="배당수익률",
-                        value=f"{dividend_yield*100:.2f}%",
-                        help="Dividend Yield"
+                        value=f"{dividend_metrics['dividend_yield_percent']:.2f}%",
+                        help=f"Dividend Yield | 안정성: {dividend_metrics['dividend_sustainability']}"
                     )
+                elif dividend_info['dividend_yield'] == 0:
+                    st.metric(
+                        label="배당수익률",
+                        value="N/A",
+                        help="배당 정보 없음"
+                    )
+                else:
+                    st.metric(
+                        label="배당수익률",
+                        value="오류",
+                        help=f"데이터 오류: {', '.join(errors)}"
+                    )
+            
+            # 추가 밸류에이션 비율 표시
+            st.markdown("#### 📊 밸류에이션 비율")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                ps_ratio = info.get('priceToSalesTrailing12Months', 0)
+                if ps_ratio and ps_ratio > 0:
+                    st.metric(
+                        label="PSR",
+                        value=f"{ps_ratio:.2f}",
+                        help="Price-to-Sales Ratio"
+                    )
+            
+            with col2:
+                peg_ratio = info.get('pegRatio', 0)
+                if peg_ratio and peg_ratio > 0:
+                    st.metric(
+                        label="PEG",
+                        value=f"{peg_ratio:.2f}",
+                        help="Price/Earnings to Growth Ratio"
+                    )
+            
+            with col3:
+                ev_ebitda = info.get('enterpriseToEbitda', 0)
+                if ev_ebitda and ev_ebitda > 0:
+                    st.metric(
+                        label="EV/EBITDA",
+                        value=f"{ev_ebitda:.1f}",
+                        help="Enterprise Value to EBITDA"
+                    )
+            
+            with col4:
+                # 추가 지표가 있으면 여기에 표시
+                st.metric(
+                    label="통화",
+                    value=financial_currency,
+                    help="Financial Currency"
+                )
+            
+            # 재무구조 정보 표시
+            st.markdown("#### 💼 재무구조")
+            
+            # 재무 데이터 수집
+            financial_data = {
+                'total_revenue': info.get('totalRevenue', 0),
+                'gross_profit': info.get('grossProfits', 0),
+                'operating_income': info.get('operatingIncome', 0),
+                'net_income': info.get('netIncomeToCommon', info.get('netIncome', 0)),
+                'ebitda': info.get('ebitda', 0),
+                'gross_margin': info.get('grossMargins', 0),
+                'operating_margin': info.get('operatingMargins', 0),
+                'profit_margin': info.get('profitMargins', 0),
+                'ebitda_margin': info.get('ebitdaMargins', 0),
+                'revenue_growth': info.get('revenueGrowth', 0),
+                'earnings_growth': info.get('earningsGrowth', 0),
+                'earnings_quarterly_growth': info.get('earningsQuarterlyGrowth', 0)
+            }
+            
+            # 재무 지표 계산
+            financial_metrics = DataProcessor.calculate_financial_metrics(financial_data, financial_currency)
+            
+            # 매출액 및 이익 정보
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    label="매출액",
+                    value=financial_metrics['formatted_revenue'],
+                    help="Total Revenue"
+                )
+            
+            with col2:
+                st.metric(
+                    label="영업이익",
+                    value=financial_metrics['formatted_operating_income'],
+                    help="Operating Income"
+                )
+            
+            with col3:
+                st.metric(
+                    label="순이익",
+                    value=financial_metrics['formatted_net_income'],
+                    help="Net Income"
+                )
+            
+            with col4:
+                st.metric(
+                    label="EBITDA",
+                    value=financial_metrics['formatted_ebitda'],
+                    help="Earnings Before Interest, Taxes, Depreciation and Amortization"
+                )
+            
+            # 수익성 지표
+            st.markdown("##### 📈 수익성 지표")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    label="매출액이익률",
+                    value=f"{financial_metrics['gross_margin']:.1f}%",
+                    help="Gross Margin"
+                )
+            
+            with col2:
+                st.metric(
+                    label="영업이익률",
+                    value=f"{financial_metrics['operating_margin']:.1f}%",
+                    help="Operating Margin"
+                )
+            
+            with col3:
+                st.metric(
+                    label="순이익률",
+                    value=f"{financial_metrics['net_margin']:.1f}%",
+                    help="Net Profit Margin"
+                )
+            
+            with col4:
+                st.metric(
+                    label="EBITDA 마진",
+                    value=f"{financial_metrics['ebitda_margin']:.1f}%",
+                    help="EBITDA Margin"
+                )
+            
+            # 성장률 지표
+            st.markdown("##### 📊 성장률 지표")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    label="매출액 증가율",
+                    value=f"{financial_metrics['revenue_growth']:.1f}%",
+                    help="Revenue Growth Rate"
+                )
+            
+            with col2:
+                st.metric(
+                    label="순이익 증가율",
+                    value=f"{financial_metrics['earnings_growth']:.1f}%",
+                    help="Earnings Growth Rate"
+                )
+            
+            with col3:
+                st.metric(
+                    label="분기 순이익 증가율",
+                    value=f"{financial_metrics['earnings_quarterly_growth']:.1f}%",
+                    help="Quarterly Earnings Growth Rate"
+                )
+            
+            # 배당 상세 정보 표시
+            if dividend_info['dividend_yield'] > 0:
+                st.markdown("#### 💰 배당 상세 정보")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    # 통화별 연간 배당금 포맷팅
+                    dividend_rate = dividend_info['dividend_rate']
+                    formatted_dividend = DataProcessor.format_currency(dividend_rate, financial_currency)
+                    st.metric(
+                        label="연간 배당금",
+                        value=formatted_dividend,
+                        help="Annual Dividend per Share"
+                    )
+                
+                with col2:
+                    st.metric(
+                        label="배당성향",
+                        value=f"{dividend_info['payout_ratio']*100:.1f}%",
+                        help="Payout Ratio"
+                    )
+                
+                with col3:
+                    ex_dividend_date = info.get('exDividendDate', None)
+                    if ex_dividend_date:
+                        from datetime import datetime
+                        if isinstance(ex_dividend_date, (int, float)):
+                            ex_date = datetime.fromtimestamp(ex_dividend_date).strftime('%Y-%m-%d')
+                        else:
+                            ex_date = str(ex_dividend_date)
+                        st.metric(
+                            label="배당락일",
+                            value=ex_date,
+                            help="Ex-Dividend Date"
+                        )
+                    else:
+                        st.metric(
+                            label="배당락일",
+                            value="N/A",
+                            help="Ex-Dividend Date"
+                        )
             
             # 추가 정보
             col1, col2 = st.columns(2)

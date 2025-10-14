@@ -487,6 +487,76 @@ class UnifiedFairValueWorkflow:
         price_change = market_data['Close'].iloc[-1] - market_data['Close'].iloc[-2] if len(market_data) > 1 else 0
         price_change_pct = (price_change / market_data['Close'].iloc[-2] * 100) if len(market_data) > 1 else 0
 
+        # 배당 정보 추가 (개별 종목인 경우)
+        dividend_info = None
+        if self.market_name == "custom" and self.custom_ticker:
+            try:
+                from data.collectors import DataCollector, DataProcessor
+                collector = DataCollector(self.market_config)
+                real_time_data = collector.fetch_real_time_data()
+                
+                if real_time_data:
+                    dividend_data = {
+                        'dividend_yield': real_time_data.get('dividend_yield', 0),
+                        'dividend_rate': real_time_data.get('dividend_rate', 0),
+                        'payout_ratio': real_time_data.get('payout_ratio', 0),
+                        'ex_dividend_date': real_time_data.get('ex_dividend_date', None)
+                    }
+                    
+                    # 밸류에이션 비율 데이터
+                    valuation_data = {
+                        'pe_ratio': real_time_data.get('pe_ratio', 0),
+                        'pb_ratio': real_time_data.get('pb_ratio', 0),
+                        'ps_ratio': real_time_data.get('ps_ratio', 0),
+                        'peg_ratio': real_time_data.get('peg_ratio', 0),
+                        'ev_ebitda': real_time_data.get('ev_ebitda', 0)
+                    }
+                    
+                    # 재무구조 데이터
+                    financial_data = {
+                        'total_revenue': real_time_data.get('total_revenue', 0),
+                        'gross_profit': real_time_data.get('gross_profit', 0),
+                        'operating_income': real_time_data.get('operating_income', 0),
+                        'net_income': real_time_data.get('net_income', 0),
+                        'ebitda': real_time_data.get('ebitda', 0),
+                        'gross_margin': real_time_data.get('gross_margin', 0),
+                        'operating_margin': real_time_data.get('operating_margin', 0),
+                        'profit_margin': real_time_data.get('profit_margin', 0),
+                        'ebitda_margin': real_time_data.get('ebitda_margin', 0),
+                        'revenue_growth': real_time_data.get('revenue_growth', 0),
+                        'earnings_growth': real_time_data.get('earnings_growth', 0),
+                        'earnings_quarterly_growth': real_time_data.get('earnings_quarterly_growth', 0)
+                    }
+                    
+                    # 배당 데이터 검증 및 지표 계산
+                    is_valid, errors = DataProcessor.validate_dividend_data(dividend_data)
+                    if is_valid:
+                        dividend_metrics = DataProcessor.calculate_dividend_metrics(
+                            dividend_data, current_price
+                        )
+                        dividend_info = {
+                            'yield_percent': dividend_metrics['dividend_yield_percent'],
+                            'annual_dividend': dividend_metrics['annual_dividend_per_share'],
+                            'payout_ratio_percent': dividend_metrics['payout_ratio_percent'],
+                            'sustainability': dividend_metrics['dividend_sustainability'],
+                            'is_valid': True,
+                            'valuation_ratios': valuation_data,
+                            'financial_data': financial_data
+                        }
+                    else:
+                        dividend_info = {
+                            'is_valid': False,
+                            'errors': errors,
+                            'valuation_ratios': valuation_data,
+                            'financial_data': financial_data
+                        }
+            except Exception as e:
+                self.logger.warning(f"배당 정보 수집 실패: {e}")
+                dividend_info = {
+                    'is_valid': False,
+                    'errors': [str(e)]
+                }
+
         summary = {
             'market_info': {
                 'market_name': self.market_config.name,
@@ -495,7 +565,8 @@ class UnifiedFairValueWorkflow:
                 'price_change': price_change,
                 'price_change_percent': price_change_pct,
                 'currency': getattr(self.market_config, 'currency', 'USD'),
-                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'dividend_info': dividend_info
             },
             'technical_summary': {
                 'rsi': tech_analysis.get('technical_indicators', {}).get('rsi', 0),

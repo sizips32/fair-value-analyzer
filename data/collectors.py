@@ -114,9 +114,36 @@ class DataCollector:
                 'volume': info.get('volume', 0),
                 'market_cap': info.get('marketCap', 0),
                 'currency': info.get('currency', 'USD'),
+                'financial_currency': info.get('financialCurrency', info.get('currency', 'USD')),
                 'long_name': info.get('longName', self.config.ticker),
                 'sector': info.get('sector', ''),
                 'industry': info.get('industry', ''),
+                'dividend_yield': info.get('dividendYield', 0),
+                'dividend_rate': info.get('dividendRate', 0),
+                'ex_dividend_date': info.get('exDividendDate', None),
+                'payout_ratio': info.get('payoutRatio', 0),
+                # 밸류에이션 비율 추가
+                'pe_ratio': info.get('trailingPE', 0),
+                'pb_ratio': info.get('priceToBook', 0),
+                'ps_ratio': info.get('priceToSalesTrailing12Months', 0),
+                'peg_ratio': info.get('pegRatio', 0),
+                'ev_ebitda': info.get('enterpriseToEbitda', 0),
+                # 재무구조 정보 추가
+                'total_revenue': info.get('totalRevenue', 0),
+                'gross_profit': info.get('grossProfits', 0),
+                'operating_income': info.get('operatingIncome', 0),
+                'net_income': info.get('netIncomeToCommon', info.get('netIncome', 0)),
+                'ebitda': info.get('ebitda', 0),
+                # 수익성 지표
+                'gross_margin': info.get('grossMargins', 0),
+                'operating_margin': info.get('operatingMargins', 0),
+                'profit_margin': info.get('profitMargins', 0),
+                'ebitda_margin': info.get('ebitdaMargins', 0),
+                # 성장률 지표
+                'revenue_growth': info.get('revenueGrowth', 0),
+                'earnings_growth': info.get('earningsGrowth', 0),
+                'earnings_quarterly_growth': info.get('earningsQuarterlyGrowth', 0),
+                'revenue_per_share': info.get('revenuePerShare', 0),
                 'timestamp': datetime.now()
             }
 
@@ -135,6 +162,188 @@ class DataCollector:
 
 class DataProcessor:
     """데이터 전처리 및 검증"""
+
+    @staticmethod
+    def validate_dividend_data(dividend_info: Dict) -> Tuple[bool, List[str]]:
+        """
+        배당 관련 데이터 검증
+        
+        Args:
+            dividend_info: 배당 정보 딕셔너리
+            
+        Returns:
+            (유효성 여부, 오류 메시지 리스트)
+        """
+        errors = []
+        
+        dividend_yield = dividend_info.get('dividend_yield', 0)
+        dividend_rate = dividend_info.get('dividend_rate', 0)
+        payout_ratio = dividend_info.get('payout_ratio', 0)
+        
+        # 배당수익률 검증 (0-100% 범위)
+        # yfinance의 dividendYield는 이미 백분율로 제공됨 (0-100 범위)
+        if dividend_yield < 0 or dividend_yield > 100:
+            errors.append(f"배당수익률이 비정상적입니다: {dividend_yield:.2f}%")
+        
+        # 배당률 검증 (양수여야 함)
+        if dividend_rate < 0:
+            errors.append(f"배당률이 음수입니다: {dividend_rate}")
+            
+        # 배당성향 검증 (0-100% 범위)
+        if payout_ratio < 0 or payout_ratio > 1:
+            errors.append(f"배당성향이 비정상적입니다: {payout_ratio*100:.2f}%")
+            
+        # 배당수익률과 배당률 일관성 검증
+        if dividend_yield > 0 and dividend_rate > 0:
+            # 대략적인 일관성 검사 (정확한 계산은 주가에 따라 달라짐)
+            if dividend_yield > 20:  # 20% 이상은 비정상적으로 높음
+                errors.append(f"배당수익률이 비정상적으로 높습니다: {dividend_yield:.2f}%")
+        
+        return len(errors) == 0, errors
+
+    @staticmethod
+    def format_large_number(value: float, currency: str) -> str:
+        """
+        큰 숫자 포맷팅 (억, 조 단위)
+        
+        Args:
+            value: 포맷팅할 값
+            currency: 통화 코드
+            
+        Returns:
+            포맷팅된 문자열
+        """
+        if currency == 'KRW':
+            # 한국: 억, 조 단위
+            if abs(value) >= 1e12:  # 조
+                return f"{value/1e12:.1f}조"
+            elif abs(value) >= 1e8:  # 억
+                return f"{value/1e8:.1f}억"
+            else:
+                return f"{value:,.0f}"
+        else:
+            # 기타 통화: B, T 단위
+            if abs(value) >= 1e12:  # T
+                return f"{value/1e12:.1f}T"
+            elif abs(value) >= 1e9:  # B
+                return f"{value/1e9:.1f}B"
+            elif abs(value) >= 1e6:  # M
+                return f"{value/1e6:.1f}M"
+            else:
+                return f"{value:,.0f}"
+
+    @staticmethod
+    def calculate_financial_metrics(financial_data: Dict, currency: str) -> Dict:
+        """
+        재무구조 지표 계산
+        
+        Args:
+            financial_data: 재무 데이터 딕셔너리
+            currency: 통화 코드
+            
+        Returns:
+            계산된 재무 지표 딕셔너리
+        """
+        total_revenue = financial_data.get('total_revenue', 0)
+        gross_profit = financial_data.get('gross_profit', 0)
+        operating_income = financial_data.get('operating_income', 0)
+        net_income = financial_data.get('net_income', 0)
+        ebitda = financial_data.get('ebitda', 0)
+        
+        # 수익성 지표 계산
+        gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0
+        operating_margin = (operating_income / total_revenue * 100) if total_revenue > 0 else 0
+        net_margin = (net_income / total_revenue * 100) if total_revenue > 0 else 0
+        ebitda_margin = (ebitda / total_revenue * 100) if total_revenue > 0 else 0
+        
+        # 포맷팅된 값들
+        formatted_revenue = DataProcessor.format_large_number(total_revenue, currency)
+        formatted_gross_profit = DataProcessor.format_large_number(gross_profit, currency)
+        formatted_operating_income = DataProcessor.format_large_number(operating_income, currency)
+        formatted_net_income = DataProcessor.format_large_number(net_income, currency)
+        formatted_ebitda = DataProcessor.format_large_number(ebitda, currency)
+        
+        return {
+            'total_revenue': total_revenue,
+            'gross_profit': gross_profit,
+            'operating_income': operating_income,
+            'net_income': net_income,
+            'ebitda': ebitda,
+            'formatted_revenue': formatted_revenue,
+            'formatted_gross_profit': formatted_gross_profit,
+            'formatted_operating_income': formatted_operating_income,
+            'formatted_net_income': formatted_net_income,
+            'formatted_ebitda': formatted_ebitda,
+            'gross_margin': gross_margin,
+            'operating_margin': operating_margin,
+            'net_margin': net_margin,
+            'ebitda_margin': ebitda_margin,
+            'revenue_growth': financial_data.get('revenue_growth', 0) * 100,
+            'earnings_growth': financial_data.get('earnings_growth', 0) * 100,
+            'earnings_quarterly_growth': financial_data.get('earnings_quarterly_growth', 0) * 100
+        }
+
+    @staticmethod
+    def format_currency(value: float, currency: str) -> str:
+        """
+        통화별 포맷팅
+        
+        Args:
+            value: 포맷팅할 값
+            currency: 통화 코드
+            
+        Returns:
+            포맷팅된 문자열
+        """
+        if currency == 'USD':
+            return f"${value:.2f}"
+        elif currency == 'KRW':
+            return f"₩{value:,.0f}"
+        elif currency == 'JPY':
+            return f"¥{value:,.0f}"
+        elif currency == 'EUR':
+            return f"€{value:.2f}"
+        elif currency == 'GBP':
+            return f"£{value:.2f}"
+        else:
+            return f"{value:.2f} {currency}"
+
+    @staticmethod
+    def calculate_dividend_metrics(dividend_info: Dict, current_price: float) -> Dict:
+        """
+        배당 관련 지표 계산
+        
+        Args:
+            dividend_info: 배당 정보 딕셔너리
+            current_price: 현재 주가
+            
+        Returns:
+            계산된 배당 지표 딕셔너리
+        """
+        dividend_yield = dividend_info.get('dividend_yield', 0)
+        dividend_rate = dividend_info.get('dividend_rate', 0)
+        payout_ratio = dividend_info.get('payout_ratio', 0)
+        
+        metrics = {
+            'dividend_yield_percent': dividend_yield,  # 이미 백분율로 제공됨
+            'dividend_rate': dividend_rate,
+            'payout_ratio_percent': payout_ratio * 100,
+            'annual_dividend_per_share': dividend_rate,
+            'dividend_per_share_yield': (dividend_rate / current_price * 100) if current_price > 0 else 0
+        }
+        
+        # 배당 안정성 지표
+        if payout_ratio > 0:
+            if payout_ratio < 0.3:
+                metrics['dividend_sustainability'] = '높음'
+            elif payout_ratio < 0.6:
+                metrics['dividend_sustainability'] = '보통'
+            else:
+                metrics['dividend_sustainability'] = '낮음'
+        else:
+            metrics['dividend_sustainability'] = 'N/A'
+            
+        return metrics
 
     @staticmethod
     def validate_data(data: pd.DataFrame) -> Tuple[bool, List[str]]:
