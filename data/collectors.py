@@ -111,12 +111,16 @@ class DataCollector:
             info = ticker.info
 
             # 현재 가격 정보
+            # Note: 지수(indices)의 경우 currentPrice가 없으므로 regularMarketPrice 사용
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+            previous_close = info.get('previousClose', 0)
+
             current_data = {
-                'current_price': info.get('currentPrice', 0),
-                'previous_close': info.get('previousClose', 0),
-                'open': info.get('open', 0),
-                'day_high': info.get('dayHigh', 0),
-                'day_low': info.get('dayLow', 0),
+                'current_price': current_price,
+                'previous_close': previous_close,
+                'open': info.get('open') or info.get('regularMarketOpen', 0),
+                'day_high': info.get('dayHigh') or info.get('regularMarketDayHigh', 0),
+                'day_low': info.get('dayLow') or info.get('regularMarketDayLow', 0),
                 'volume': info.get('volume', 0),
                 'market_cap': info.get('marketCap', 0),
                 'currency': info.get('currency', 'USD'),
@@ -154,12 +158,16 @@ class DataCollector:
             }
 
             # 변화량 계산
-            if current_data['previous_close'] > 0:
-                change = current_data['current_price'] - current_data['previous_close']
-                change_percent = (change / current_data['previous_close']) * 100
+            if previous_close > 0:
+                change = current_price - previous_close
+                change_percent = (change / previous_close) * 100
                 current_data['change'] = change
                 current_data['change_percent'] = change_percent
+            else:
+                current_data['change'] = 0
+                current_data['change_percent'] = 0
 
+            self.logger.debug(f"Real-time data fetched: {self.config.ticker} = {current_price} (prev: {previous_close})")
             return current_data
 
         except ValueError as e:
