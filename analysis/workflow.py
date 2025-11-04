@@ -516,9 +516,23 @@ class UnifiedFairValueWorkflow:
         if market_data is None or market_data.empty:
             return {}
 
-        current_price = market_data['Close'].iloc[-1]
-        price_change = market_data['Close'].iloc[-1] - market_data['Close'].iloc[-2] if len(market_data) > 1 else 0
-        price_change_pct = (price_change / market_data['Close'].iloc[-2] * 100) if len(market_data) > 1 else 0
+        # 실시간 데이터 수집 (분석 기간과 상관없이 현재 가격 사용)
+        from data.collectors import DataCollector
+        collector = DataCollector(self.market_config)
+        real_time_data = collector.fetch_real_time_data()
+
+        # 현재가: 실시간 데이터 사용 (정확함), 없으면 시장 데이터 마지막 Close 사용
+        if real_time_data and real_time_data.get('current_price', 0) > 0:
+            current_price = real_time_data.get('current_price', 0)
+            price_change = real_time_data.get('change', 0)
+            price_change_pct = real_time_data.get('change_percent', 0)
+            self.logger.info(f"Using real-time price: {current_price} (change: {price_change:+.2f})")
+        else:
+            # Fallback: 과거 데이터 사용 (실시간 데이터 수집 실패 시)
+            current_price = market_data['Close'].iloc[-1]
+            price_change = market_data['Close'].iloc[-1] - market_data['Close'].iloc[-2] if len(market_data) > 1 else 0
+            price_change_pct = (price_change / market_data['Close'].iloc[-2] * 100) if len(market_data) > 1 else 0
+            self.logger.warning(f"Using historical data price: {current_price} (real-time data unavailable)")
 
         # 배당 정보 추가 (개별 종목인 경우)
         dividend_info = None
