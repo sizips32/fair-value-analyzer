@@ -96,6 +96,8 @@ class FairValueApp:
             st.session_state.analysis_running = False
         if 'last_settings_hash' not in st.session_state:
             st.session_state.last_settings_hash = None
+        if 'skip_settings_reset' not in st.session_state:
+            st.session_state.skip_settings_reset = False
 
     def render_sidebar(self) -> Dict:
         """사이드바 렌더링 및 설정 수집"""
@@ -688,13 +690,18 @@ class FairValueApp:
         # 설정 변경 감지 (시장 변경, 기간 변경 등)
         settings_key = f"{settings.get('market', '')}_{settings.get('custom_ticker', '')}_{settings.get('start_date', '')}_{settings.get('end_date', '')}"
         settings_hash = hashlib.md5(settings_key.encode()).hexdigest()
-        
-        # 설정이 변경되었으면 이전 결과 무효화
-        if st.session_state.last_settings_hash and st.session_state.last_settings_hash != settings_hash:
+
+        # 설정이 변경되었으면 이전 결과 무효화 (st.rerun() 직후가 아닌 경우만)
+        if (st.session_state.last_settings_hash and
+            st.session_state.last_settings_hash != settings_hash and
+            not st.session_state.skip_settings_reset):
             st.session_state.analysis_result = None
             st.session_state.last_analysis_time = None
-            st.info("⚙️ 설정이 변경되어 이전 분석 결과가 초기화되었습니다.")
-        
+            st.warning("⚙️ 설정이 변경되어 이전 분석 결과가 초기화되었습니다.")
+
+        # skip flag 초기화
+        st.session_state.skip_settings_reset = False
+
         # 현재 설정 해시 저장
         st.session_state.last_settings_hash = settings_hash
 
@@ -713,6 +720,8 @@ class FairValueApp:
     async def run_analysis(self, settings: Dict):
         """분석 실행"""
         st.session_state.analysis_running = True
+        progress_bar = None
+        status_text = None
 
         try:
             # 진행률 표시
@@ -720,47 +729,97 @@ class FairValueApp:
             status_text = st.empty()
 
             def progress_callback(progress: float, step_name: str, status: str):
-                progress_bar.progress(progress)
-                status_text.text(f"🔄 {step_name}: {status}")
+                try:
+                    if progress_bar:
+                        progress_bar.progress(min(progress, 0.99))  # 최대 99%
+                    if status_text:
+                        status_text.text(f"🔄 {step_name}: {status}")
+                except Exception as e:
+                    logger.warning(f"Progress update error: {e}")
 
             # 워크플로우 초기화
-            if settings['market'] == 'custom' and settings.get('custom_ticker'):
-                # 개별 종목 분석을 위한 커스텀 설정
-                workflow = UnifiedFairValueWorkflow("custom", custom_ticker=settings['custom_ticker'])
-            else:
-                # 주요 지수 분석
-                workflow = UnifiedFairValueWorkflow(settings['market'])
+            try:
+                if settings['market'] == 'custom' and settings.get('custom_ticker'):
+                    # 개별 종목 분석을 위한 커스텀 설정
+                    logger.info(f"Starting custom analysis for ticker: {settings['custom_ticker']}")
+                    workflow = UnifiedFairValueWorkflow("custom", custom_ticker=settings['custom_ticker'])
+                else:
+                    # 주요 지수 분석
+                    logger.info(f"Starting index analysis for market: {settings['market']}")
+                    workflow = UnifiedFairValueWorkflow(settings['market'])
+            except (ValueError, KeyError) as e:
+                logger.error(f"Workflow initialization failed: {e}")
+                raise
 
             # 몬테카를로 설정 업데이트
-            config_manager.update_config('monte_carlo',
-                simulations=settings['monte_carlo_sims'],
-                forecast_days=settings['forecast_days'],
-                confidence_levels=settings['confidence_levels'],
-                method=settings['mc_method']
-            )
+            try:
+                config_manager.update_config('monte_carlo',
+                    simulations=settings['monte_carlo_sims'],
+                    forecast_days=settings['forecast_days'],
+                    confidence_levels=settings['confidence_levels'],
+                    method=settings['mc_method']
+                )
+                logger.info(f"Monte Carlo config updated: {settings['mc_method']}")
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Monte Carlo config update failed: {e}")
+                raise
 
             # 분석 실행
-            result = await workflow.run_complete_analysis(
-                start_date=settings['start_date'],
-                end_date=settings['end_date'],
-                progress_callback=progress_callback
-            )
+            try:
+                logger.info(f"Running analysis: {settings['start_date']} to {settings['end_date']}")
+                result = await workflow.run_complete_analysis(
+                    start_date=settings['start_date'],
+                    end_date=settings['end_date'],
+                    progress_callback=progress_callback
+                )
 
-            # 결과 저장
-            st.session_state.analysis_result = result
-            st.session_state.last_analysis_time = datetime.now()
+                if result is None:
+                    raise ValueError("Analysis returned None result")
 
-            # UI 정리
-            progress_bar.empty()
-            status_text.empty()
+                logger.info("Analysis completed successfully")
 
-            st.success("✅ 분석이 완료되었습니다!")
+                # 결과 저장
+                st.session_state.analysis_result = result
+                st.session_state.last_analysis_time = datetime.now()
 
+                # UI 정리
+                if progress_bar:
+                    progress_bar.progress(1.0)
+                if status_text:
+                    status_text.empty()
+
+                st.success("✅ 분석이 완료되었습니다!")
+
+            except (ValueError, ConnectionError) as e:
+                logger.error(f"Analysis execution failed: {e}", exc_info=True)
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during analysis: {e}", exc_info=True)
+                raise
+
+        except (ValueError, KeyError) as e:
+            st.error(f"❌ 분석 설정 오류: {str(e)}")
+            logger.error(f"Configuration error: {e}")
+        except ConnectionError as e:
+            st.error(f"❌ 네트워크 오류: {str(e)}")
+            logger.error(f"Network error: {e}")
         except Exception as e:
             st.error(f"❌ 분석 중 오류 발생: {str(e)}")
+            logger.error(f"Analysis error: {e}", exc_info=True)
 
         finally:
             st.session_state.analysis_running = False
+            # UI 정리
+            if progress_bar:
+                try:
+                    progress_bar.empty()
+                except Exception:
+                    pass
+            if status_text:
+                try:
+                    status_text.empty()
+                except Exception:
+                    pass
 
     def render_summary_metrics(self, result):
         """요약 지표 카드"""
@@ -1092,8 +1151,6 @@ class FairValueApp:
 
         # 분석 실행
         if should_run_analysis:
-            # 이전 결과 초기화 (새 데이터 가져오기)
-            st.session_state.analysis_result = None
             try:
                 # Streamlit에서 안전하게 async 함수 실행
                 try:
@@ -1107,7 +1164,7 @@ class FairValueApp:
                                 new_loop.run_until_complete(self.run_analysis(settings))
                             finally:
                                 new_loop.close()
-                        
+
                         thread = threading.Thread(target=run_in_thread)
                         thread.start()
                         thread.join()
@@ -1126,11 +1183,25 @@ class FairValueApp:
                                 lambda: asyncio.run(self.run_analysis(settings))
                             )
                             future.result(timeout=300)  # 5분 타임아웃
+            except (ValueError, KeyError) as e:
+                st.error(f"❌ 분석 설정 오류: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
+            except ConnectionError as e:
+                st.error(f"❌ 네트워크 오류: 인터넷 연결을 확인해주세요. {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
             except Exception as e:
                 st.error(f"❌ 분석 실행 중 오류 발생: {str(e)}")
                 import traceback
                 with st.expander("상세 오류 정보"):
                     st.code(traceback.format_exc())
+                logger.error(f"Analysis execution error: {str(e)}", exc_info=True)
+
+            # st.rerun() 직후 설정 초기화 방지
+            st.session_state.skip_settings_reset = True
             st.rerun()  # 결과 표시를 위해 리로드
 
         # 요약 지표
