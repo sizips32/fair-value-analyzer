@@ -11,6 +11,11 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import asyncio
 import time
+import hashlib
+import threading
+import concurrent.futures
+import html
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -18,6 +23,9 @@ from typing import Dict, Optional
 from analysis.workflow import UnifiedFairValueWorkflow
 from config.settings import config_manager
 from visualization.dashboard import FairValueDashboard
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 # 페이지 설정
 st.set_page_config(
@@ -65,6 +73,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def safe_html(text: str) -> str:
+    """XSS 방지를 위한 HTML escape 헬퍼 함수"""
+    if text is None:
+        return ""
+    return html.escape(str(text))
+
 class FairValueApp:
     """Fair Value Analyzer 메인 애플리케이션"""
 
@@ -80,6 +94,8 @@ class FairValueApp:
             st.session_state.last_analysis_time = None
         if 'analysis_running' not in st.session_state:
             st.session_state.analysis_running = False
+        if 'last_settings_hash' not in st.session_state:
+            st.session_state.last_settings_hash = None
 
     def render_sidebar(self) -> Dict:
         """사이드바 렌더링 및 설정 수집"""
@@ -156,8 +172,17 @@ class FairValueApp:
                     else:
                         st.sidebar.error("❌ 유효하지 않은 티커입니다")
                         selected_market = "kospi"  # 기본값
-                except Exception as e:
+                except (ValueError, KeyError) as e:
                     st.sidebar.error(f"❌ 티커 검증 오류: {str(e)}")
+                    logger.warning(f"Invalid ticker validation: {str(e)}")
+                    selected_market = "kospi"  # 기본값
+                except ConnectionError as e:
+                    st.sidebar.error("❌ 네트워크 연결 오류. 인터넷 연결을 확인하세요.")
+                    logger.error(f"Network error during ticker validation: {str(e)}")
+                    selected_market = "kospi"  # 기본값
+                except Exception as e:
+                    st.sidebar.error(f"❌ 예상치 못한 오류: {str(e)}")
+                    logger.error(f"Unexpected error during ticker validation: {str(e)}", exc_info=True)
                     selected_market = "kospi"  # 기본값
             else:
                 st.sidebar.warning("⚠️ 티커를 입력해주세요")
@@ -268,35 +293,50 @@ class FairValueApp:
                 import yfinance as yf
                 ticker = yf.Ticker(custom_ticker)
                 info = ticker.info
-                
+
                 company_name = info.get('longName', custom_ticker)
                 currency = info.get('currency', 'USD')
-                
-                st.markdown(f'<h1 class="main-header">📊 {company_name} Fair Value Analyzer</h1>',
+
+                # XSS 방지: 사용자 입력 escape
+                safe_company_name = safe_html(company_name)
+                safe_currency = safe_html(currency)
+                safe_ticker = safe_html(custom_ticker)
+
+                st.markdown(f'<h1 class="main-header">📊 {safe_company_name} Fair Value Analyzer</h1>',
                            unsafe_allow_html=True)
-                
+
                 st.markdown(f"""
                 <div style="text-align: center; color: #666; margin-bottom: 2rem;">
                     실시간 데이터 기반 공정가치 분석 및 예측 시스템<br>
-                    <small>Ticker: {custom_ticker} | Currency: {currency}</small>
+                    <small>Ticker: {safe_ticker} | Currency: {safe_currency}</small>
                 </div>
                 """, unsafe_allow_html=True)
-                
-            except Exception as e:
+
+            except (ValueError, KeyError, ConnectionError) as e:
                 st.error(f"종목 정보를 가져올 수 없습니다: {str(e)}")
+                st.markdown('<h1 class="main-header">📊 개별 종목 Fair Value Analyzer</h1>',
+                           unsafe_allow_html=True)
+            except Exception as e:
+                logger.error(f"Unexpected error fetching stock info: {str(e)}", exc_info=True)
+                st.error(f"예상치 못한 오류가 발생했습니다: {str(e)}")
                 st.markdown('<h1 class="main-header">📊 개별 종목 Fair Value Analyzer</h1>',
                            unsafe_allow_html=True)
         else:
             # 주요 지수 분석
             market_config = config_manager.get_market_config(market_name)
 
-            st.markdown(f'<h1 class="main-header">📊 {market_config.name} Fair Value Analyzer</h1>',
+            # XSS 방지: 설정값 escape
+            safe_name = safe_html(market_config.name)
+            safe_ticker = safe_html(market_config.ticker)
+            safe_currency = safe_html(market_config.currency)
+
+            st.markdown(f'<h1 class="main-header">📊 {safe_name} Fair Value Analyzer</h1>',
                        unsafe_allow_html=True)
 
             st.markdown(f"""
             <div style="text-align: center; color: #666; margin-bottom: 2rem;">
                 실시간 데이터 기반 공정가치 분석 및 예측 시스템<br>
-                <small>Ticker: {market_config.ticker} | Currency: {market_config.currency}</small>
+                <small>Ticker: {safe_ticker} | Currency: {safe_currency}</small>
             </div>
             """, unsafe_allow_html=True)
 
@@ -621,7 +661,7 @@ class FairValueApp:
 
     def render_analysis_controls(self, settings: Dict) -> bool:
         """분석 실행 컨트롤"""
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
 
         with col1:
             run_analysis = st.button(
@@ -631,17 +671,42 @@ class FairValueApp:
             )
 
         with col2:
+            refresh_data = st.button(
+                "🔄 데이터 새로고침",
+                disabled=st.session_state.analysis_running,
+                help="최신 데이터를 가져와서 분석을 다시 실행합니다",
+                type="secondary"
+            )
+
+        with col3:
             if st.session_state.last_analysis_time:
                 st.info(f"마지막 분석: {st.session_state.last_analysis_time.strftime('%H:%M:%S')}")
 
-        with col3:
+        with col4:
             auto_refresh = st.checkbox("자동 새로고침 (5분)", value=False)
+
+        # 설정 변경 감지 (시장 변경, 기간 변경 등)
+        settings_key = f"{settings.get('market', '')}_{settings.get('custom_ticker', '')}_{settings.get('start_date', '')}_{settings.get('end_date', '')}"
+        settings_hash = hashlib.md5(settings_key.encode()).hexdigest()
+        
+        # 설정이 변경되었으면 이전 결과 무효화
+        if st.session_state.last_settings_hash and st.session_state.last_settings_hash != settings_hash:
+            st.session_state.analysis_result = None
+            st.session_state.last_analysis_time = None
+            st.info("⚙️ 설정이 변경되어 이전 분석 결과가 초기화되었습니다.")
+        
+        # 현재 설정 해시 저장
+        st.session_state.last_settings_hash = settings_hash
 
         # 자동 새로고침 로직
         if auto_refresh and st.session_state.last_analysis_time:
             time_diff = datetime.now() - st.session_state.last_analysis_time
             if time_diff.total_seconds() > 300:  # 5분
                 return True
+
+        # 새로고침 버튼 클릭 시
+        if refresh_data:
+            return True
 
         return run_analysis
 
@@ -776,19 +841,44 @@ class FairValueApp:
 
     def render_comprehensive_analysis(self, result):
         """종합 분석 탭"""
+        if not result or not hasattr(result, 'market_data'):
+            st.error("❌ 분석 결과가 없습니다. 분석을 먼저 실행해주세요.")
+            return
+        
+        if result.market_data is None or result.market_data.empty:
+            st.warning("⚠️ 시장 데이터가 없습니다. 데이터 수집을 확인해주세요.")
+            return
+
         col1, col2 = st.columns([2, 1])
 
         with col1:
             # 가격 차트 + 기술적 지표
-            if not result.market_data.empty:
+            try:
+                # 필수 컬럼 확인
+                required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                missing_cols = [col for col in required_cols if col not in result.market_data.columns]
+                
+                if missing_cols:
+                    st.error(f"❌ 필수 데이터 컬럼이 없습니다: {missing_cols}")
+                    st.info(f"현재 데이터 컬럼: {list(result.market_data.columns)}")
+                    return
+                
                 fig = self.dashboard.create_comprehensive_chart(result.market_data)
-                st.plotly_chart(fig, use_container_width=True)
+                if fig is not None:
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("❌ 차트 생성에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 차트 렌더링 중 오류 발생: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
 
         with col2:
             # 인사이트 박스
             st.markdown("### 💡 AI 인사이트")
 
-            if result.insights:
+            if result.insights and len(result.insights) > 0:
                 insights_html = "<div class='insights-box'>"
                 for insight in result.insights[-10:]:  # 최근 10개
                     insights_html += f"<p style='margin: 0.5rem 0;'>• {insight}</p>"
@@ -800,14 +890,23 @@ class FairValueApp:
 
         # 신뢰구간 차트
         if result.monte_carlo_result:
-            st.markdown("### 🎯 가격 예측 신뢰구간")
-            confidence_fig = self.dashboard.create_confidence_intervals_chart(result.monte_carlo_result)
-            st.plotly_chart(confidence_fig, use_container_width=True)
+            try:
+                st.markdown("### 🎯 가격 예측 신뢰구간")
+                confidence_fig = self.dashboard.create_confidence_intervals_chart(result.monte_carlo_result)
+                if confidence_fig is not None:
+                    st.plotly_chart(confidence_fig, use_container_width=True)
+                else:
+                    st.warning("⚠️ 신뢰구간 차트 생성에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 신뢰구간 차트 렌더링 중 오류 발생: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
 
     def render_monte_carlo_analysis(self, result):
         """몬테카를로 분석 탭"""
-        if not result.monte_carlo_result:
-            st.warning("몬테카를로 시뮬레이션 결과가 없습니다.")
+        if not result or not result.monte_carlo_result:
+            st.warning("⚠️ 몬테카를로 시뮬레이션 결과가 없습니다.")
             return
 
         mc_result = result.monte_carlo_result
@@ -817,14 +916,32 @@ class FairValueApp:
         with col1:
             # 시뮬레이션 경로
             st.markdown("### 📈 시뮬레이션 경로")
-            paths_fig = self.dashboard.create_simulation_paths_chart(mc_result)
-            st.plotly_chart(paths_fig, use_container_width=True)
+            try:
+                paths_fig = self.dashboard.create_simulation_paths_chart(mc_result)
+                if paths_fig is not None:
+                    st.plotly_chart(paths_fig, use_container_width=True)
+                else:
+                    st.error("❌ 시뮬레이션 경로 차트 생성에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 시뮬레이션 경로 차트 오류: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
 
         with col2:
             # 분포 히스토그램
             st.markdown("### 📊 최종 가격 분포")
-            dist_fig = self.dashboard.create_price_distribution_chart(mc_result)
-            st.plotly_chart(dist_fig, use_container_width=True)
+            try:
+                dist_fig = self.dashboard.create_price_distribution_chart(mc_result)
+                if dist_fig is not None:
+                    st.plotly_chart(dist_fig, use_container_width=True)
+                else:
+                    st.error("❌ 가격 분포 차트 생성에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 가격 분포 차트 오류: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
 
         # 통계 테이블
         st.markdown("### 📋 시뮬레이션 통계")
@@ -844,13 +961,26 @@ class FairValueApp:
 
     def render_technical_analysis(self, result):
         """기술적 분석 탭"""
-        if result.market_data.empty:
-            st.warning("시장 데이터가 없습니다.")
+        if not result or not hasattr(result, 'market_data'):
+            st.error("❌ 분석 결과가 없습니다.")
+            return
+            
+        if result.market_data is None or result.market_data.empty:
+            st.warning("⚠️ 시장 데이터가 없습니다.")
             return
 
         # 기술적 지표 차트
-        technical_fig = self.dashboard.create_technical_indicators_chart(result.market_data)
-        st.plotly_chart(technical_fig, use_container_width=True)
+        try:
+            technical_fig = self.dashboard.create_technical_indicators_chart(result.market_data)
+            if technical_fig is not None:
+                st.plotly_chart(technical_fig, use_container_width=True)
+            else:
+                st.error("❌ 기술적 지표 차트 생성에 실패했습니다.")
+        except Exception as e:
+            st.error(f"❌ 기술적 분석 차트 오류: {str(e)}")
+            import traceback
+            with st.expander("상세 오류 정보"):
+                st.code(traceback.format_exc())
 
         # 매매 신호 요약
         if not result.signals.empty:
@@ -925,9 +1055,18 @@ class FairValueApp:
 
         # 리스크 시각화
         if result.monte_carlo_result:
-            st.markdown("### 📈 리스크-수익률 분포")
-            risk_return_fig = self.dashboard.create_risk_return_chart(result.monte_carlo_result)
-            st.plotly_chart(risk_return_fig, use_container_width=True)
+            try:
+                st.markdown("### 📈 리스크-수익률 분포")
+                risk_return_fig = self.dashboard.create_risk_return_chart(result.monte_carlo_result)
+                if risk_return_fig is not None:
+                    st.plotly_chart(risk_return_fig, use_container_width=True)
+                else:
+                    st.error("❌ 리스크-수익률 차트 생성에 실패했습니다.")
+            except Exception as e:
+                st.error(f"❌ 리스크-수익률 차트 오류: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
 
     def render_footer(self):
         """푸터"""
@@ -953,7 +1092,45 @@ class FairValueApp:
 
         # 분석 실행
         if should_run_analysis:
-            asyncio.run(self.run_analysis(settings))
+            # 이전 결과 초기화 (새 데이터 가져오기)
+            st.session_state.analysis_result = None
+            try:
+                # Streamlit에서 안전하게 async 함수 실행
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 이미 실행 중인 loop이면 새 스레드에서 실행
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                new_loop.run_until_complete(self.run_analysis(settings))
+                            finally:
+                                new_loop.close()
+                        
+                        thread = threading.Thread(target=run_in_thread)
+                        thread.start()
+                        thread.join()
+                    else:
+                        # Event loop가 없거나 실행 중이 아니면 직접 실행
+                        asyncio.run(self.run_analysis(settings))
+                except RuntimeError as e:
+                    # Event loop 관련 오류 처리
+                    try:
+                        asyncio.run(self.run_analysis(settings))
+                    except RuntimeError:
+                        # 완전히 새로운 이벤트 루프 생성
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(
+                                lambda: asyncio.run(self.run_analysis(settings))
+                            )
+                            future.result(timeout=300)  # 5분 타임아웃
+            except Exception as e:
+                st.error(f"❌ 분석 실행 중 오류 발생: {str(e)}")
+                import traceback
+                with st.expander("상세 오류 정보"):
+                    st.code(traceback.format_exc())
             st.rerun()  # 결과 표시를 위해 리로드
 
         # 요약 지표
@@ -972,5 +1149,14 @@ class FairValueApp:
 
 # 애플리케이션 실행
 if __name__ == "__main__":
-    app = FairValueApp()
-    app.run()
+    try:
+        app = FairValueApp()
+        app.run()
+    except KeyboardInterrupt:
+        # 정상 종료
+        pass
+    except Exception as e:
+        # 예상치 못한 오류 처리
+        import sys
+        sys.stderr.write(f"Application error: {str(e)}\n")
+        raise

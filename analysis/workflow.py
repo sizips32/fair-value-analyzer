@@ -148,9 +148,30 @@ class UnifiedFairValueWorkflow:
 
                     self.logger.info(f"Step {step.name} completed successfully")
 
+                except (ValueError, KeyError) as e:
+                    error_msg = f"Error in step {step.name}: Invalid data - {str(e)}"
+                    self.logger.error(error_msg)
+                    context['errors'].append(error_msg)
+
+                    if progress_callback:
+                        progress_callback(completed_weight / total_weight, step.name, f"오류: {str(e)}")
+
+                    # 필수 단계에서 오류 발생 시 중단
+                    if step.required:
+                        raise
+                except ConnectionError as e:
+                    error_msg = f"Error in step {step.name}: Network error - {str(e)}"
+                    self.logger.error(error_msg)
+                    context['errors'].append(error_msg)
+
+                    if progress_callback:
+                        progress_callback(completed_weight / total_weight, step.name, f"네트워크 오류: {str(e)}")
+
+                    if step.required:
+                        raise
                 except Exception as e:
                     error_msg = f"Error in step {step.name}: {str(e)}"
-                    self.logger.error(error_msg)
+                    self.logger.error(error_msg, exc_info=True)
                     context['errors'].append(error_msg)
 
                     if progress_callback:
@@ -163,8 +184,14 @@ class UnifiedFairValueWorkflow:
             # 최종 결과 생성
             return self._create_final_result(context)
 
+        except (ValueError, KeyError) as e:
+            self.logger.error(f"Analysis failed: Invalid data - {str(e)}")
+            raise
+        except ConnectionError as e:
+            self.logger.error(f"Analysis failed: Network error - {str(e)}")
+            raise
         except Exception as e:
-            self.logger.error(f"Analysis failed: {str(e)}")
+            self.logger.error(f"Analysis failed: {str(e)}", exc_info=True)
             raise
 
     async def _collect_data(self, context: Dict) -> Dict:
@@ -196,8 +223,14 @@ class UnifiedFairValueWorkflow:
                 'real_time_data': real_time_data
             }
 
+        except ValueError as e:
+            self.logger.error(f"Data collection failed: Invalid data - {e}")
+            raise
+        except ConnectionError as e:
+            self.logger.error(f"Data collection failed: Network error - {e}")
+            raise
         except Exception as e:
-            self.logger.error(f"Data collection failed: {e}")
+            self.logger.error(f"Data collection failed: {e}", exc_info=True)
             raise
 
     async def _validate_data(self, context: Dict) -> Dict:

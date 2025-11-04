@@ -59,14 +59,20 @@ class DataCollector:
             self.logger.info(f"Successfully fetched {len(data)} rows for {self.config.ticker}")
             return data
 
+        except ValueError as e:
+            self.logger.error(f"No data available for {self.config.ticker}: {e}")
+            raise
+        except ConnectionError as e:
+            self.logger.error(f"Network error fetching data for {self.config.ticker}: {e}")
+            raise
         except Exception as e:
-            self.logger.error(f"Error fetching data for {self.config.ticker}: {e}")
+            self.logger.error(f"Error fetching data for {self.config.ticker}: {e}", exc_info=True)
             raise
 
     def _clean_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """데이터 정리 및 전처리"""
         # 열 이름 정리 - yfinance에서 반환되는 실제 열 이름 확인
-        print(f"Original columns: {list(data.columns)}")
+        self.logger.debug(f"Original columns: {list(data.columns)}")
 
         # yfinance에서 반환되는 표준 열 이름에 맞춰 조정
         expected_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -156,8 +162,17 @@ class DataCollector:
 
             return current_data
 
+        except ValueError as e:
+            self.logger.error(f"Invalid data in real-time fetch: {e}")
+            return {}
+        except ConnectionError as e:
+            self.logger.error(f"Network error fetching real-time data: {e}")
+            return {}
+        except KeyError as e:
+            self.logger.error(f"Missing data field in real-time response: {e}")
+            return {}
         except Exception as e:
-            self.logger.error(f"Error fetching real-time data: {e}")
+            self.logger.error(f"Error fetching real-time data: {e}", exc_info=True)
             return {}
 
 class DataProcessor:
