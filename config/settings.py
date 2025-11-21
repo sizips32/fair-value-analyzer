@@ -1,12 +1,24 @@
 """
 설정 관리 모듈
 분석 파라미터, 시장 설정, 모델 설정을 중앙 관리
+환경 변수와 YAML 설정을 통합 관리
 """
 
 import yaml
+import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pathlib import Path
+
+# 환경 변수 지원
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+    DOTENV_AVAILABLE = True
+except ImportError:
+    DOTENV_AVAILABLE = False
 
 @dataclass
 class MarketConfig:
@@ -59,15 +71,87 @@ class MLConfig:
             self.models = ["LSTM", "GRU", "Prophet"]
 
 class ConfigManager:
-    """설정 관리자"""
+    """설정 관리자 (환경 변수 + YAML 통합)"""
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or self._get_default_config_path()
+        # 환경 변수에서 기본값 로드
+        self._load_env_config()
         self._load_config()
+    
+    def _load_env_config(self):
+        """환경 변수에서 설정 로드"""
+        # 환경 변수는 YAML 설정보다 우선순위가 낮음 (YAML이 기본값)
+        # 하지만 특정 설정은 환경 변수로 오버라이드 가능
+        self.env_config = {
+            'cache_dir': os.getenv('CACHE_DIR', './cache'),
+            'cache_max_size_mb': int(os.getenv('CACHE_MAX_SIZE_MB', '500')),
+            'cache_ttl_hours': int(os.getenv('CACHE_TTL_HOURS', '24')),
+            'log_level': os.getenv('LOG_LEVEL', 'INFO').upper(),
+            'log_dir': os.getenv('LOG_DIR', './logs'),
+            'log_to_file': os.getenv('LOG_TO_FILE', 'true').lower() == 'true',
+            'log_to_console': os.getenv('LOG_TO_CONSOLE', 'true').lower() == 'true',
+        }
 
     def _get_default_config_path(self) -> str:
         """기본 설정 파일 경로"""
         return str(Path(__file__).parent / "config.yaml")
+
+    def _validate_config(self, config_data: Dict) -> bool:
+        """
+        설정값 검증
+        
+        Args:
+            config_data: 설정 데이터 딕셔너리
+            
+        Returns:
+            검증 성공 여부
+            
+        Raises:
+            ValueError: 필수 섹션이나 필드가 없을 때
+        """
+        # 필수 섹션 확인
+        required_sections = ['markets', 'technical', 'monte_carlo']
+        for section in required_sections:
+            if section not in config_data:
+                raise ValueError(f"Missing required section: {section}")
+
+        # 시장 설정 검증
+        markets = config_data.get('markets', {})
+        if not markets:
+            raise ValueError("At least one market configuration is required")
+
+        for market_name, market_data in markets.items():
+            if not isinstance(market_data, dict):
+                raise ValueError(f"Market {market_name} configuration must be a dictionary")
+            
+            required_fields = ['ticker', 'name', 'currency']
+            for field in required_fields:
+                if field not in market_data:
+                    raise ValueError(f"Market '{market_name}' missing required field: {field}")
+            
+            # 티커 유효성 검사
+            if not market_data.get('ticker') or not isinstance(market_data['ticker'], str):
+                raise ValueError(f"Market '{market_name}' ticker must be a non-empty string")
+
+        # 기술적 분석 설정 검증
+        technical = config_data.get('technical', {})
+        if technical:
+            if 'rsi_period' in technical and (not isinstance(technical['rsi_period'], int) or technical['rsi_period'] < 1):
+                raise ValueError("RSI period must be a positive integer")
+            if 'ma_periods' in technical:
+                if not isinstance(technical['ma_periods'], list) or not all(isinstance(p, int) and p > 0 for p in technical['ma_periods']):
+                    raise ValueError("MA periods must be a list of positive integers")
+
+        # 몬테카를로 설정 검증
+        monte_carlo = config_data.get('monte_carlo', {})
+        if monte_carlo:
+            if 'simulations' in monte_carlo and (not isinstance(monte_carlo['simulations'], int) or monte_carlo['simulations'] < 1):
+                raise ValueError("Monte Carlo simulations must be a positive integer")
+            if 'forecast_days' in monte_carlo and (not isinstance(monte_carlo['forecast_days'], int) or monte_carlo['forecast_days'] < 1):
+                raise ValueError("Forecast days must be a positive integer")
+
+        return True
 
     def _load_config(self):
         """설정 파일 로드"""
@@ -77,6 +161,9 @@ class ConfigManager:
         except FileNotFoundError:
             config_data = self._get_default_config()
             self._save_config(config_data)
+
+        # 설정 검증
+        self._validate_config(config_data)
 
         self.markets = {
             name: MarketConfig(**data)
@@ -166,6 +253,10 @@ class ConfigManager:
         config_data = self._config_to_dict()
         self._save_config(config_data)
 
+    def get_env_config(self, key: str, default: Any = None) -> Any:
+        """환경 변수 설정 조회"""
+        return self.env_config.get(key, default)
+    
     def _config_to_dict(self) -> Dict:
         """설정을 딕셔너리로 변환"""
         return {

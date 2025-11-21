@@ -9,15 +9,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import Dict, List, Optional, Tuple
-try:
-    import colorcet as cc
-except ImportError:
-    cc = None
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from analysis.monte_carlo import SimulationResult
+try:
+    from ..analysis.monte_carlo import SimulationResult
+except ImportError:
+    from analysis.monte_carlo import SimulationResult
+
 
 class FairValueDashboard:
     """공정가치 분석 대시보드"""

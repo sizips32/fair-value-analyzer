@@ -11,25 +11,28 @@ import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import logging
-from functools import lru_cache
 from pathlib import Path
+
+from utils.logging_config import get_logger
 try:
     import streamlit as st
 except ImportError:
     # Streamlit이 없는 환경에서도 작동하도록
     st = None
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import MarketConfig
+try:
+    from ..config.settings import MarketConfig
+except ImportError:
+    from config.settings import MarketConfig
+
 
 class DataCollector:
     """통합 데이터 수집기"""
 
-    def __init__(self, market_config: MarketConfig):
+    def __init__(self, market_config: MarketConfig, use_cache: bool = True):
         self.config = market_config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
+        self.cache = DataCache() if use_cache else None
 
     def fetch_historical_data(self,
                             start_date: datetime,
@@ -46,6 +49,16 @@ class DataCollector:
         Returns:
             OHLCV 데이터프레임
         """
+        # 캐시 확인
+        if self.cache:
+            cache_key = self.cache.get_cache_key(
+                f"{self.config.ticker}_{interval}", start_date, end_date
+            )
+            cached_data = self.cache.load_from_cache(cache_key)
+            if cached_data is not None:
+                self.logger.info(f"Using cached data for {self.config.ticker}")
+                return cached_data
+
         try:
             ticker = yf.Ticker(self.config.ticker)
             data = ticker.history(start=start_date, end=end_date, interval=interval)
@@ -55,6 +68,10 @@ class DataCollector:
 
             # 데이터 정리
             data = self._clean_data(data)
+
+            # 캐시 저장
+            if self.cache:
+                self.cache.save_to_cache(cache_key, data)
 
             self.logger.info(f"Successfully fetched {len(data)} rows for {self.config.ticker}")
             return data
@@ -521,11 +538,25 @@ class MultiMarketCollector:
         )
 
 class DataCache:
-    """데이터 캐싱 시스템"""
+    """데이터 캐싱 시스템 (개선된 버전)"""
 
-    def __init__(self, cache_dir: str = "./cache"):
+    def __init__(
+        self, 
+        cache_dir: str = "./cache",
+        max_cache_size_mb: int = 500,
+        default_ttl_hours: int = 24
+    ):
+        """
+        Args:
+            cache_dir: 캐시 디렉토리 경로
+            max_cache_size_mb: 최대 캐시 크기 (MB)
+            default_ttl_hours: 기본 캐시 유효 시간 (시간)
+        """
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(exist_ok=True, parents=True)
+        self.max_cache_size_mb = max_cache_size_mb
+        self.default_ttl_hours = default_ttl_hours
+        self.logger = get_logger(__name__)
 
     def get_cache_key(self, ticker: str, start_date: datetime, end_date: datetime) -> str:
         """캐시 키 생성"""
@@ -533,14 +564,144 @@ class DataCache:
 
     def save_to_cache(self, key: str, data: pd.DataFrame):
         """캐시에 데이터 저장"""
-        cache_file = self.cache_dir / f"{key}.parquet"
-        data.to_parquet(cache_file)
+        try:
+            # 캐시 크기 확인 및 정리
+            self.cleanup_old_cache()
+            
+            cache_file = self.cache_dir / f"{key}.parquet"
+            data.to_parquet(cache_file, compression='snappy')
+            self.logger.debug(f"Saved to cache: {key}")
+        except Exception as e:
+            self.logger.error(f"Failed to save cache {key}: {e}")
 
-    def load_from_cache(self, key: str) -> Optional[pd.DataFrame]:
-        """캐시에서 데이터 로드"""
+    def load_from_cache(self, key: str, ttl_hours: Optional[int] = None) -> Optional[pd.DataFrame]:
+        """
+        캐시에서 데이터 로드
+        
+        Args:
+            key: 캐시 키
+            ttl_hours: 캐시 유효 시간 (None이면 기본값 사용)
+        
+        Returns:
+            캐시된 데이터 또는 None
+        """
         cache_file = self.cache_dir / f"{key}.parquet"
-        if cache_file.exists():
-            # 캐시 파일이 24시간 이내인지 확인
-            if (datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)).hours < 24:
-                return pd.read_parquet(cache_file)
-        return None
+        
+        if not cache_file.exists():
+            return None
+        
+        try:
+            # 캐시 파일 유효성 확인
+            file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            time_diff = datetime.now() - file_time
+            ttl = ttl_hours if ttl_hours is not None else self.default_ttl_hours
+            
+            if time_diff.total_seconds() < ttl * 3600:
+                data = pd.read_parquet(cache_file)
+                self.logger.debug(f"Loaded from cache: {key}")
+                return data
+            else:
+                # 만료된 캐시 파일 삭제
+                self.logger.debug(f"Cache expired: {key}")
+                cache_file.unlink()
+                return None
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to load cache file {cache_file}: {e}")
+            # 손상된 캐시 파일 삭제
+            try:
+                cache_file.unlink()
+            except:
+                pass
+            return None
+
+    def cleanup_old_cache(self):
+        """오래된 캐시 파일 정리"""
+        try:
+            total_size = 0
+            cache_files = []
+            
+            # 모든 캐시 파일 정보 수집
+            for cache_file in self.cache_dir.glob("*.parquet"):
+                try:
+                    stat = cache_file.stat()
+                    size = stat.st_size
+                    mtime = stat.st_mtime
+                    cache_files.append((cache_file, size, mtime))
+                    total_size += size
+                except Exception as e:
+                    self.logger.warning(f"Error reading cache file {cache_file}: {e}")
+            
+            # 크기 제한 초과 시 오래된 파일부터 삭제
+            max_size_bytes = self.max_cache_size_mb * 1024 * 1024
+            
+            if total_size > max_size_bytes:
+                # 수정 시간순 정렬 (오래된 것부터)
+                cache_files.sort(key=lambda x: x[2])
+                
+                deleted_count = 0
+                for cache_file, size, _ in cache_files:
+                    if total_size <= max_size_bytes:
+                        break
+                    
+                    try:
+                        cache_file.unlink()
+                        total_size -= size
+                        deleted_count += 1
+                    except Exception as e:
+                        self.logger.warning(f"Failed to delete cache file {cache_file}: {e}")
+                
+                if deleted_count > 0:
+                    self.logger.info(f"Cleaned up {deleted_count} old cache files")
+        
+        except Exception as e:
+            self.logger.error(f"Error during cache cleanup: {e}")
+
+    def clear_all_cache(self):
+        """모든 캐시 삭제"""
+        try:
+            deleted_count = 0
+            for cache_file in self.cache_dir.glob("*.parquet"):
+                try:
+                    cache_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete {cache_file}: {e}")
+            
+            self.logger.info(f"Cleared {deleted_count} cache files")
+        except Exception as e:
+            self.logger.error(f"Error clearing cache: {e}")
+
+    def get_cache_stats(self) -> Dict[str, any]:
+        """캐시 통계 정보 반환"""
+        try:
+            total_size = 0
+            file_count = 0
+            oldest_file_time = None
+            newest_file_time = None
+            
+            for cache_file in self.cache_dir.glob("*.parquet"):
+                try:
+                    stat = cache_file.stat()
+                    total_size += stat.st_size
+                    file_count += 1
+                    
+                    mtime = datetime.fromtimestamp(stat.st_mtime)
+                    if oldest_file_time is None or mtime < oldest_file_time:
+                        oldest_file_time = mtime
+                    if newest_file_time is None or mtime > newest_file_time:
+                        newest_file_time = mtime
+                except:
+                    pass
+            
+            return {
+                'total_size_mb': total_size / (1024 * 1024),
+                'file_count': file_count,
+                'oldest_file': oldest_file_time,
+                'newest_file': newest_file_time,
+                'max_size_mb': self.max_cache_size_mb,
+                'usage_percent': (total_size / (self.max_cache_size_mb * 1024 * 1024)) * 100
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting cache stats: {e}")
+            return {}

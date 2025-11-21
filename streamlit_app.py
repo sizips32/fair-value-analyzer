@@ -3,6 +3,14 @@ Fair Value Analyzer - Streamlit 대시보드
 통합 공정가치 분석 웹 애플리케이션
 """
 
+import sys
+from pathlib import Path
+
+# 현재 파일의 부모 디렉토리를 Python 경로에 추가
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,11 +19,11 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import asyncio
 import time
-import hashlib
 import threading
 import concurrent.futures
 import html
 import logging
+import yfinance as yf
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -23,9 +31,10 @@ from typing import Dict, Optional
 from analysis.workflow import UnifiedFairValueWorkflow
 from config.settings import config_manager
 from visualization.dashboard import FairValueDashboard
+from utils.logging_config import get_logger
 
 # 로거 설정
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 페이지 설정
 st.set_page_config(
@@ -94,10 +103,6 @@ class FairValueApp:
             st.session_state.last_analysis_time = None
         if 'analysis_running' not in st.session_state:
             st.session_state.analysis_running = False
-        if 'last_settings_hash' not in st.session_state:
-            st.session_state.last_settings_hash = None
-        if 'skip_settings_reset' not in st.session_state:
-            st.session_state.skip_settings_reset = False
 
     def render_sidebar(self) -> Dict:
         """사이드바 렌더링 및 설정 수집"""
@@ -152,7 +157,6 @@ class FairValueApp:
             if custom_ticker:
                 # 티커 유효성 검사
                 try:
-                    import yfinance as yf
                     test_ticker = yf.Ticker(custom_ticker)
                     info = test_ticker.info
                     if info and 'symbol' in info:
@@ -292,7 +296,6 @@ class FairValueApp:
         if market_name == "custom" and custom_ticker:
             # 개별 종목 분석
             try:
-                import yfinance as yf
                 ticker = yf.Ticker(custom_ticker)
                 info = ticker.info
 
@@ -352,7 +355,6 @@ class FairValueApp:
         
         # 실시간 데이터에서 추가 정보 가져오기
         try:
-            import yfinance as yf
             from data.collectors import DataProcessor
             
             ticker = yf.Ticker(market_info.get('ticker', ''))
@@ -686,24 +688,6 @@ class FairValueApp:
 
         with col4:
             auto_refresh = st.checkbox("자동 새로고침 (5분)", value=False)
-
-        # 설정 변경 감지 (시장 변경, 기간 변경 등)
-        settings_key = f"{settings.get('market', '')}_{settings.get('custom_ticker', '')}_{settings.get('start_date', '')}_{settings.get('end_date', '')}"
-        settings_hash = hashlib.md5(settings_key.encode()).hexdigest()
-
-        # 설정이 변경되었으면 이전 결과 무효화 (st.rerun() 직후가 아닌 경우만)
-        if (st.session_state.last_settings_hash and
-            st.session_state.last_settings_hash != settings_hash and
-            not st.session_state.skip_settings_reset):
-            st.session_state.analysis_result = None
-            st.session_state.last_analysis_time = None
-            st.warning("⚙️ 설정이 변경되어 이전 분석 결과가 초기화되었습니다.")
-
-        # skip flag 초기화
-        st.session_state.skip_settings_reset = False
-
-        # 현재 설정 해시 저장
-        st.session_state.last_settings_hash = settings_hash
 
         # 자동 새로고침 로직
         if auto_refresh and st.session_state.last_analysis_time:
@@ -1200,8 +1184,6 @@ class FairValueApp:
                     st.code(traceback.format_exc())
                 logger.error(f"Analysis execution error: {str(e)}", exc_info=True)
 
-            # st.rerun() 직후 설정 초기화 방지
-            st.session_state.skip_settings_reset = True
             st.rerun()  # 결과 표시를 위해 리로드
 
         # 요약 지표

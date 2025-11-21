@@ -11,14 +11,18 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.logging_config import get_logger
 
-from analysis.technical import TechnicalAnalyzer
-from analysis.monte_carlo import MonteCarloSimulator, SimulationResult
-from data.collectors import DataCollector, DataProcessor
-from config.settings import config_manager
+try:
+    from .technical import TechnicalAnalyzer
+    from .monte_carlo import MonteCarloSimulator, SimulationResult
+    from ..data.collectors import DataCollector, DataProcessor
+    from ..config.settings import config_manager
+except ImportError:
+    from analysis.technical import TechnicalAnalyzer
+    from analysis.monte_carlo import MonteCarloSimulator, SimulationResult
+    from data.collectors import DataCollector, DataProcessor
+    from config.settings import config_manager
 
 @dataclass
 class AnalysisStep:
@@ -51,7 +55,10 @@ class UnifiedFairValueWorkflow:
         # 시장 설정 처리
         if market_name == "custom" and custom_ticker:
             # 개별 종목을 위한 커스텀 설정 생성
-            from config.settings import MarketConfig
+            try:
+                from ..config.settings import MarketConfig
+            except ImportError:
+                from config.settings import MarketConfig
             self.market_config = MarketConfig(
                 ticker=custom_ticker,
                 name=custom_ticker,
@@ -72,7 +79,7 @@ class UnifiedFairValueWorkflow:
         self.data_processor = DataProcessor()
 
         # 로거 설정
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # 분석 단계 정의
         self.analysis_steps = [
@@ -517,7 +524,10 @@ class UnifiedFairValueWorkflow:
             return {}
 
         # 실시간 데이터 수집 (분석 기간과 상관없이 현재 가격 사용)
-        from data.collectors import DataCollector
+        try:
+            from ..data.collectors import DataCollector
+        except ImportError:
+            from data.collectors import DataCollector
         collector = DataCollector(self.market_config)
         real_time_data = collector.fetch_real_time_data()
 
@@ -538,7 +548,10 @@ class UnifiedFairValueWorkflow:
         dividend_info = None
         if self.market_name == "custom" and self.custom_ticker:
             try:
-                from data.collectors import DataCollector, DataProcessor
+                try:
+                    from ..data.collectors import DataCollector, DataProcessor
+                except ImportError:
+                    from data.collectors import DataCollector, DataProcessor
                 collector = DataCollector(self.market_config)
                 real_time_data = collector.fetch_real_time_data()
                 

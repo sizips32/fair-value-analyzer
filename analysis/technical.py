@@ -8,6 +8,8 @@ import numpy as np
 import logging
 from typing import Dict, List, Tuple, Optional
 
+from utils.logging_config import get_logger
+
 try:
     import talib
     TALIB_AVAILABLE = True
@@ -15,23 +17,24 @@ except ImportError:
     TALIB_AVAILABLE = False
     logger = logging.getLogger(__name__)
     logger.warning("TA-Lib not available. Some advanced indicators will be skipped.")
-from ta import add_all_ta_features
+
 from ta.trend import MACD, SMAIndicator, EMAIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator
 from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator, MFIIndicator
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import TechnicalConfig
+try:
+    from ..config.settings import TechnicalConfig
+except ImportError:
+    from config.settings import TechnicalConfig
+
 
 class TechnicalAnalyzer:
     """통합 기술적 분석기"""
 
     def __init__(self, config: TechnicalConfig):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.indicators = {}
         self.signals = {}
 
@@ -139,16 +142,11 @@ class TechnicalAnalyzer:
                 # Parabolic SAR
                 data['PSAR'] = talib.SAR(data['High'].values, data['Low'].values)
             except ValueError as e:
-                # TechnicalAnalyzer 인스턴스가 없는 경우를 대비
-                logger = logging.getLogger(__name__)
-                logger.warning(f"TA-Lib calculation failed: Invalid data - {e}")
+                self.logger.warning(f"TA-Lib calculation failed: Invalid data - {e}")
             except KeyError as e:
-                logger = logging.getLogger(__name__)
-                logger.warning(f"TA-Lib calculation failed: Missing column - {e}")
+                self.logger.warning(f"TA-Lib calculation failed: Missing column - {e}")
             except Exception as e:
-                # TechnicalAnalyzer 인스턴스가 없는 경우를 대비
-                logger = logging.getLogger(__name__)
-                logger.warning(f"TA-Lib indicator calculation failed: {e}", exc_info=True)
+                self.logger.warning(f"TA-Lib indicator calculation failed: {e}", exc_info=True)
 
         return data
 

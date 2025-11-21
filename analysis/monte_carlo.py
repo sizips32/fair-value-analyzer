@@ -7,15 +7,15 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from scipy import stats
-import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
 from dataclasses import dataclass
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import MonteCarloConfig
+try:
+    from ..config.settings import MonteCarloConfig
+except ImportError:
+    from config.settings import MonteCarloConfig
+
 
 @dataclass
 class SimulationResult:
